@@ -1,0 +1,93 @@
+#include <M5Stack.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+const char* ssid = "Skill issue";
+const char* password = "Skill-issue";
+const char* mqtt_server = "mqtt-broker.zdw31.cloud";
+const int mqtt_port = 1883;
+const int heartRatePin = 36;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+int heartRates[60];
+int currentIndex = 0;
+int bpmThreshold = 90; // Schwellenwert für "Lüge" oder "Wahrheit"
+
+void reconnect() {
+  while (!client.connected()) {
+    M5.Lcd.setCursor(0, 200);
+    M5.Lcd.println("Verbindung zu MQTT bitte warten...");
+    if (client.connect("M5StackClient", "user1", "HWSFI2024!")) {
+      M5.Lcd.setCursor(0, 200);
+      M5.Lcd.println("Mit MQTT verbunden       ");
+    } else {
+      M5.Lcd.setCursor(0, 200);
+      M5.Lcd.print("Fehler, rc=");
+      M5.Lcd.print(client.state());
+      M5.Lcd.println(" Wiederholung in 5 Sek.");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  M5.begin();
+  WiFi.begin(ssid, password);
+  pinMode(heartRatePin, INPUT);
+  client.setServer(mqtt_server, mqtt_port);
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextColor(WHITE);
+  M5.Lcd.setTextSize(2);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    M5.Lcd.setCursor(0, 220);
+    M5.Lcd.println("Verbindung zum WLAN...");
+    delay(500);
+  }
+  M5.Lcd.println("WLAN verbunden           ");
+  reconnect();
+  memset(heartRates, 0, sizeof(heartRates));
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  int currentBPM = analogRead(heartRatePin);
+  heartRates[currentIndex] = currentBPM;
+  currentIndex = (currentIndex + 1) % 60;
+
+  M5.Lcd.fillRect(0, 0, 320, 20, BLACK); // Bereich für den Text
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.printf("Herzschlag: %d BPM", currentBPM);
+
+  // Herzsymbol
+  uint16_t heartColor = currentBPM > bpmThreshold ? RED : GREEN;
+  M5.Lcd.fillCircle(158, 80, 14, heartColor);
+  M5.Lcd.fillCircle(182, 80, 14, heartColor);
+  M5.Lcd.fillTriangle(150, 80, 190, 80, 170, 110, heartColor);
+
+  char message[50];
+  sprintf(message, "Herzschlag: %d BPM", currentBPM);
+  client.publish("m5stack/heartbeat", message);
+
+  M5.Lcd.fillRect(0, 210, 320, 30, BLACK); // Bereich für Wahrheit/Lüge
+  M5.Lcd.setCursor(0, 210);
+  M5.Lcd.println(currentBPM > bpmThreshold ? "Luege" : "Wahrheit");
+
+  // Grafik neu zeichnen
+  M5.Lcd.fillRect(0, 130, 320, 80, BLACK); // Bereich für Grafik
+  for (int i = 0; i < 59; i++) {
+    int x1 = i * (320 / 60);
+    int y1 = map(heartRates[i], 0, 200, 200, 130);
+    int x2 = (i + 1) * (320 / 60);
+    int y2 = map(heartRates[(i + 1) % 60], 0, 200, 200, 130);
+    M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+  }
+
+  delay(1000); // Aktualisierungsrate von einer Sekunde
+}
